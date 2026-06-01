@@ -180,7 +180,9 @@ def build_summary_table(filtered: pd.DataFrame, contract_kw: float) -> pd.DataFr
             "Contract kW": round(contract_kw, 2),
         }
     )
-    table["Over Contract"] = (table["Daily Max kW"] - table["Contract kW"]).clip(lower=0).round(2)
+
+    over_contract = (table["Daily Max kW"] - table["Contract kW"]).round(2)
+    table["Over Contract"] = over_contract.apply(lambda x: f"{x:,.2f}" if x > 0 else "-")
     return table
 
 
@@ -286,8 +288,14 @@ def fig_to_png_bytes(fig) -> bytes:
 def make_table_png(table: pd.DataFrame, title: str = "Daily Maximum Demand Table") -> bytes:
     highlight_color = "#fff2cc"
     display_df = table.copy()
-    for col in ["Daily Max kW", "Contract kW", "Over Contract"]:
+
+    for col in ["Daily Max kW", "Contract kW"]:
         display_df[col] = display_df[col].map(lambda v: f"{float(v):,.2f}")
+
+    # Keep non-exceeding days as "-" instead of "0.00".
+    display_df["Over Contract"] = display_df["Over Contract"].map(
+        lambda v: "-" if str(v).strip() in ["", "-", "0", "0.0", "0.00"] else str(v)
+    )
 
     fig_h = max(3, len(display_df) * 0.35)
     fig, ax = plt.subplots(figsize=(11, fig_h + 1.0))
@@ -330,6 +338,7 @@ def make_table_png(table: pd.DataFrame, title: str = "Daily Maximum Demand Table
     png = fig_to_png_bytes(fig)
     plt.close(fig)
     return png
+
 
 
 def dataframe_to_csv_bytes(df: pd.DataFrame) -> bytes:
