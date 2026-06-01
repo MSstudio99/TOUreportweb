@@ -733,19 +733,13 @@ else:
 
     selected_records = [label_to_record[label] for label in selected_labels]
 
-    default_contract_kw = st.number_input(
-        "Default contract kW for new/blank rows",
-        min_value=0.0,
-        value=400.0,
-        step=10.0,
-        help="Edit individual contract values in the table below.",
-    )
+    st.info("Edit individual contract values in the table below.")
 
     config_df = pd.DataFrame(
         {
             "Cabin": [record["cabin"] for record in selected_records],
             "Filename": [record["filename"] for record in selected_records],
-            "Contract kW": [default_contract_kw for _ in selected_records],
+            "Contract kW": [0.0 for _ in selected_records],
         }
     )
 
@@ -760,9 +754,13 @@ else:
                 min_value=0.0,
                 step=10.0,
                 format="%.2f",
+                required=True,
             )
         },
     )
+
+    if (edited_config["Contract kW"].astype(float) <= 0).any():
+        st.warning("Some contract kW values are still 0.00. Update them before using the result for official reporting.")
 
     # First pass: detect available date range for selected files.
     precheck = []
@@ -790,61 +788,38 @@ else:
         st.dataframe(pd.DataFrame(error_rows), use_container_width=True)
         st.stop()
 
-    date_mode = st.radio(
-        "Date range option",
-        options=["Use full date range from each file", "Use one date range for all selected files"],
-        horizontal=True,
+    # Batch mode now always uses one common date range for all selected files.
+    overall_min = min(all_min_dates)
+    overall_max = max(all_max_dates)
+
+    selected_range = st.date_input(
+        "Use one date range for all selected files",
+        value=(overall_min, overall_max),
+        min_value=overall_min,
+        max_value=overall_max,
     )
 
-    if date_mode == "Use one date range for all selected files":
-        overall_min = min(all_min_dates)
-        overall_max = max(all_max_dates)
-        selected_range = st.date_input(
-            "Common date range",
-            value=(overall_min, overall_max),
-            min_value=overall_min,
-            max_value=overall_max,
-        )
-
-        if isinstance(selected_range, tuple) and len(selected_range) == 2:
-            start_date, end_date = selected_range
-        else:
-            start_date, end_date = overall_min, overall_max
-
-        if start_date > end_date:
-            st.error("Start date must be before end date.")
-            st.stop()
+    if isinstance(selected_range, tuple) and len(selected_range) == 2:
+        start_date, end_date = selected_range
     else:
-        start_date, end_date = None, None
+        start_date, end_date = overall_min, overall_max
+
+    if start_date > end_date:
+        st.error("Start date must be before end date.")
+        st.stop()
 
     if st.button("Run batch analysis", type="primary", use_container_width=True):
         successful = []
         failed = []
         summary_rows = []
-        daily_tables = []
 
         for record, (_, cfg_row) in zip(selected_records, edited_config.iterrows()):
             contract_kw = float(cfg_row["Contract kW"])
-
-            if date_mode == "Use one date range for all selected files":
-                analysis = analyze_record_auto(record, contract_kw, start_date, end_date)
-                row_start, row_end = start_date, end_date
-            else:
-                analysis = analyze_record_auto(record, contract_kw)
-                if analysis["ok"]:
-                    row_start = analysis["filtered"]["peak_timestamp"].dt.date.min()
-                    row_end = analysis["filtered"]["peak_timestamp"].dt.date.max()
-                else:
-                    row_start, row_end = "", ""
+            analysis = analyze_record_auto(record, contract_kw, start_date, end_date)
 
             if analysis["ok"]:
                 successful.append(analysis)
-                summary_rows.append(summarize_analysis(analysis, row_start, row_end))
-
-                daily = analysis["table"].copy()
-                daily.insert(0, "Filename", record["filename"])
-                daily.insert(0, "Cabin", record["cabin"])
-                daily_tables.append(daily)
+                summary_rows.append(summarize_analysis(analysis, start_date, end_date))
             else:
                 failed.append(
                     {
@@ -859,7 +834,6 @@ else:
 
         if successful:
             combined_summary = pd.DataFrame(summary_rows)
-            combined_daily = pd.concat(daily_tables, ignore_index=True) if daily_tables else pd.DataFrame()
 
             ok_count = len(successful)
             fail_count = len(failed)
@@ -880,14 +854,7 @@ else:
                 use_container_width=True,
             )
 
-            st.subheader("Combined daily max table")
-            st.dataframe(combined_daily, use_container_width=True)
-
-            bundle_start = start_date if start_date is not None else "full"
-            bundle_end = end_date if end_date is not None else "range"
-            zip_bytes = build_zip_bundle(successful, combined_summary, combined_daily, bundle_start, bundle_end)
-
-            e1, e2, e3 = st.columns(3)
+            e1, e2 = st.columns(2)
             e1.download_button(
                 "Download combined summary CSV",
                 data=dataframe_to_csv_bytes(combined_summary),
@@ -896,41 +863,105 @@ else:
                 use_container_width=True,
             )
             e2.download_button(
-                "Download combined Excel",
-                data=dataframe_to_excel_bytes(
-                    {
-                        "Combined Summary": combined_summary,
-                        "Combined Daily Max": combined_daily,
-                    }
-                ),
+                "Download combined summary Excel",
+                data=dataframe_to_excel_bytes({"Combined Summary": combined_summary}),
                 file_name="combined_daily_max_summary.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True,
             )
-            e3.download_button(
-                "Download ZIP report bundle",
-                data=zip_bytes,
-                file_name="daily_max_report_bundle.zip",
+
+            st.subheader("Individual cabin charts and tables")
+
+            individual_sheets = {"Combined Summary": combined_summary}
+            individual_zip_buffer = io.BytesIO()
+
+            with zipfile.ZipFile(individual_zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("combined_summary.csv", dataframe_to_csv_bytes(combined_summary))
+                zf.writestr(
+                    "combined_summary.xlsx",
+                    dataframe_to_excel_bytes({"Combined Summary": combined_summary}),
+                )
+
+                for analysis in successful:
+                    record = analysis["record"]
+                    cabin = record["cabin"]
+                    cabin_safe = safe_filename(cabin)
+                    table = analysis["table"]
+                    filtered = analysis["filtered"]
+                    contract_kw = analysis["contract_kw"]
+
+                    individual_sheets[cabin_safe[:31]] = table
+
+                    with st.expander(f"{cabin} — {record['filename']}", expanded=False):
+                        st.markdown("#### Chart")
+                        with _PLOT_LOCK:
+                            fig = make_chart(filtered, cabin, contract_kw, start_date, end_date)
+                            st.pyplot(fig, clear_figure=False)
+                            chart_png = fig_to_png_bytes(fig)
+                            plt.close(fig)
+
+                        st.markdown("#### Daily maximum demand table")
+                        st.dataframe(
+                            table.style.apply(
+                                lambda row: [
+                                    "background-color: #fff2cc"
+                                    if row["Daily Max kW"] == table["Daily Max kW"].max()
+                                    else ""
+                                    for _ in row
+                                ],
+                                axis=1,
+                            ),
+                            use_container_width=True,
+                        )
+
+                        table_png = make_table_png(table, title=f"Daily Max Table – {cabin}")
+                        table_csv = dataframe_to_csv_bytes(table)
+                        table_excel = dataframe_to_excel_bytes({"Daily Max": table})
+
+                        d1, d2, d3, d4 = st.columns(4)
+                        d1.download_button(
+                            "Download chart PNG",
+                            data=chart_png,
+                            file_name=f"{cabin_safe}_daily_max_chart.png",
+                            mime="image/png",
+                            use_container_width=True,
+                        )
+                        d2.download_button(
+                            "Download table PNG",
+                            data=table_png,
+                            file_name=f"{cabin_safe}_daily_max_table.png",
+                            mime="image/png",
+                            use_container_width=True,
+                        )
+                        d3.download_button(
+                            "Download table CSV",
+                            data=table_csv,
+                            file_name=f"{cabin_safe}_daily_max_table.csv",
+                            mime="text/csv",
+                            use_container_width=True,
+                        )
+                        d4.download_button(
+                            "Download table Excel",
+                            data=table_excel,
+                            file_name=f"{cabin_safe}_daily_max_table.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True,
+                        )
+
+                    zf.writestr(f"{cabin_safe}/{cabin_safe}_daily_max_chart.png", chart_png)
+                    zf.writestr(f"{cabin_safe}/{cabin_safe}_daily_max_table.png", table_png)
+                    zf.writestr(f"{cabin_safe}/{cabin_safe}_daily_max_table.csv", table_csv)
+                    zf.writestr(f"{cabin_safe}/{cabin_safe}_daily_max_table.xlsx", table_excel)
+
+            individual_zip_buffer.seek(0)
+
+            st.download_button(
+                "Download ZIP bundle of all individual charts and tables",
+                data=individual_zip_buffer.getvalue(),
+                file_name="individual_daily_max_reports.zip",
                 mime="application/zip",
                 use_container_width=True,
             )
-
-            with st.expander("Show individual charts"):
-                for analysis in successful:
-                    record = analysis["record"]
-                    st.markdown(f"### {record['cabin']} — `{record['filename']}`")
-                    with _PLOT_LOCK:
-                        chart_start = start_date if start_date is not None else analysis["filtered"]["peak_timestamp"].dt.date.min()
-                        chart_end = end_date if end_date is not None else analysis["filtered"]["peak_timestamp"].dt.date.max()
-                        fig = make_chart(
-                            analysis["filtered"],
-                            record["cabin"],
-                            analysis["contract_kw"],
-                            chart_start,
-                            chart_end,
-                        )
-                        st.pyplot(fig, clear_figure=False)
-                        plt.close(fig)
 
         if failed:
             st.subheader("Files that need attention")
