@@ -238,8 +238,7 @@ def make_chart(filtered: pd.DataFrame, cabin_name: str, contract_kw: float, star
         annotation_va = "bottom"
 
     ax.annotate(
-        f"Max: {max_y:.2f} kW
-{max_label}",
+        f"Max: {max_y:.2f} kW\n{max_label}",
         xy=(max_x, max_y),
         xytext=annotation_offset,
         textcoords="offset points",
@@ -252,8 +251,7 @@ def make_chart(filtered: pd.DataFrame, cabin_name: str, contract_kw: float, star
     )
 
     ax.set_title(
-        f"Daily Maximum Demand – {cabin_name}
-{start_date} to {end_date}",
+        f"Daily Maximum Demand – {cabin_name}\n{start_date} to {end_date}",
         pad=22,
         weight="bold",
     )
