@@ -171,6 +171,7 @@ def filter_by_date(result: pd.DataFrame, start_date, end_date) -> pd.DataFrame:
 
 
 def build_summary_table(filtered: pd.DataFrame, contract_kw: float) -> pd.DataFrame:
+    """Build the clean daily table shown/exported to users."""
     table = pd.DataFrame(
         {
             "No.": range(1, len(filtered) + 1),
@@ -179,9 +180,7 @@ def build_summary_table(filtered: pd.DataFrame, contract_kw: float) -> pd.DataFr
             "Contract kW": round(contract_kw, 2),
         }
     )
-    table["Excess kW"] = (table["Daily Max kW"] - table["Contract kW"]).clip(lower=0).round(2)
-    table["Remaining kW"] = (table["Contract kW"] - table["Daily Max kW"]).round(2)
-    table["Status"] = np.where(table["Excess kW"] > 0, "Over Contract", "OK")
+    table["Over Contract"] = (table["Daily Max kW"] - table["Contract kW"]).clip(lower=0).round(2)
     return table
 
 
@@ -287,7 +286,7 @@ def fig_to_png_bytes(fig) -> bytes:
 def make_table_png(table: pd.DataFrame, title: str = "Daily Maximum Demand Table") -> bytes:
     highlight_color = "#fff2cc"
     display_df = table.copy()
-    for col in ["Daily Max kW", "Contract kW", "Excess kW", "Remaining kW"]:
+    for col in ["Daily Max kW", "Contract kW", "Over Contract"]:
         display_df[col] = display_df[col].map(lambda v: f"{float(v):,.2f}")
 
     fig_h = max(3, len(display_df) * 0.35)
@@ -295,7 +294,7 @@ def make_table_png(table: pd.DataFrame, title: str = "Daily Maximum Demand Table
     ax.axis("off")
     ax.set_title(title, pad=12, weight="bold")
 
-    col_widths = [0.25, 1.7, 0.9, 0.9, 0.9, 0.9, 0.8]
+    col_widths = [0.25, 1.7, 0.9, 0.9, 0.95]
     norm_col_widths = [w / sum(col_widths) for w in col_widths]
     mpl_table = ax.table(
         cellText=display_df.values,
@@ -438,17 +437,22 @@ def analyze_record_auto(record: dict, contract_kw: float, start_date=None, end_d
         return output
 
 
+def calculate_over_contract(filtered: pd.DataFrame, contract_kw: float):
+    """Calculate over-contract statistics without adding extra columns to the daily table."""
+    excess_series = (filtered["daily_max_kW"] - float(contract_kw)).clip(lower=0)
+    exceed_days = int((excess_series > 0).sum())
+    max_excess = float(excess_series.max()) if len(excess_series) else 0.0
+    return exceed_days, max_excess
+
 def summarize_analysis(analysis: dict, start_date, end_date) -> dict:
     record = analysis["record"]
-    table = analysis["table"]
     filtered = analysis["filtered"]
     contract_kw = analysis["contract_kw"]
 
     peak_row = filtered.loc[filtered["daily_max_kW"].idxmax()]
     peak_kw = float(peak_row["daily_max_kW"])
     peak_time = peak_row["peak_timestamp"]
-    exceed_days = int((table["Excess kW"] > 0).sum())
-    max_excess = float(table["Excess kW"].max())
+    exceed_days, max_excess = calculate_over_contract(filtered, contract_kw)
 
     return {
         "Cabin": record["cabin"],
@@ -623,8 +627,7 @@ if mode == "Review one selected file":
     peak_row = filtered.loc[filtered["daily_max_kW"].idxmax()]
     peak_kw = float(peak_row["daily_max_kW"])
     peak_time = peak_row["peak_timestamp"]
-    exceed_days = int((table["Excess kW"] > 0).sum())
-    max_excess = float(table["Excess kW"].max())
+    exceed_days, max_excess = calculate_over_contract(filtered, contract_kw)
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Maximum kW", f"{peak_kw:,.2f}")
