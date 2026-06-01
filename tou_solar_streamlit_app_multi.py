@@ -198,46 +198,85 @@ def make_chart(filtered: pd.DataFrame, cabin_name: str, contract_kw: float, star
     yvals = filtered["daily_max_kW"].to_numpy(dtype=float)
     xpos = np.arange(len(labels))
 
-    fig, ax = plt.subplots(figsize=(13, 5))
+    fig, ax = plt.subplots(figsize=(13, 5.8))
     ax.plot(xpos, yvals, marker="o", label="Daily Max (kW)")
     ax.axhline(contract_kw, linestyle="--", label=f"Contract {contract_kw:g} kW")
 
     for xi, yi in zip(xpos, yvals):
-        ax.vlines(xi, min(yi, contract_kw), max(yi, contract_kw), linestyles="--", alpha=0.35)
+        ax.vlines(
+            xi,
+            min(yi, contract_kw),
+            max(yi, contract_kw),
+            linestyles="--",
+            alpha=0.35,
+        )
+
+    ymin = min(np.min(yvals), contract_kw)
+    ymax = max(np.max(yvals), contract_kw)
+    y_range = ymax - ymin if ymax > ymin else max(abs(ymax), 1.0)
+
+    # Add enough vertical space so labels/annotation do not hit the title.
+    bottom_pad = 0.08 * y_range
+    top_pad = 0.22 * y_range
+    ax.set_ylim(ymin - bottom_pad, ymax + top_pad)
 
     max_idx = int(np.argmax(yvals))
     max_x = xpos[max_idx]
     max_y = yvals[max_idx]
     max_label = labels[max_idx]
+
+    # If the peak is close to the top of the axis, place the annotation below the point.
+    # Otherwise, place it above. This prevents collision with the chart title.
+    axis_top = ymax + top_pad
+    top_distance_ratio = (axis_top - max_y) / (axis_top - (ymin - bottom_pad))
+
+    if top_distance_ratio < 0.18:
+        annotation_offset = (0, -45)
+        annotation_va = "top"
+    else:
+        annotation_offset = (0, 32)
+        annotation_va = "bottom"
+
     ax.annotate(
-        f"Max: {max_y:.2f} kW\n{max_label}",
+        f"Max: {max_y:.2f} kW
+{max_label}",
         xy=(max_x, max_y),
-        xytext=(0, 25),
+        xytext=annotation_offset,
         textcoords="offset points",
         ha="center",
-        va="bottom",
+        va=annotation_va,
         fontsize=9,
         arrowprops=dict(arrowstyle="->", lw=1.2),
         bbox=dict(boxstyle="round,pad=0.3", fc="wheat", ec="gray", alpha=0.85),
+        annotation_clip=False,
     )
 
-    ax.set_title(f"Daily Maximum Demand – {cabin_name}\n{start_date} to {end_date}")
+    ax.set_title(
+        f"Daily Maximum Demand – {cabin_name}
+{start_date} to {end_date}",
+        pad=22,
+        weight="bold",
+    )
     ax.set_ylabel("ACTIVE POWER (kW)")
     ax.set_xlabel("")
 
-    ymin, ymax = min(np.min(yvals), contract_kw), max(np.max(yvals), contract_kw)
-    pad = 0.05 * (ymax - ymin if ymax > ymin else 1.0)
-    ax.set_ylim(ymin - pad, ymax + pad)
-    ax.yaxis.set_major_locator(mticker.MultipleLocator(adaptive_tick([10, 20, 50, 100], ymin, ymax)))
+    ax.yaxis.set_major_locator(
+        mticker.MultipleLocator(adaptive_tick([10, 20, 50, 100], ymin, ymax))
+    )
     ax.grid(axis="y", linestyle=":", linewidth=0.8, alpha=0.6)
 
     ax.set_xticks(xpos)
     ax.set_xticklabels(labels, rotation=45, ha="right")
+
     for spine in ["top", "right", "left", "bottom"]:
         ax.spines[spine].set_visible(False)
+
     ax.legend(loc="lower left", frameon=False)
-    fig.tight_layout()
+
+    # Leave extra room for the title and rotated x-axis labels.
+    fig.subplots_adjust(top=0.78, bottom=0.32)
     return fig
+
 
 
 def fig_to_png_bytes(fig) -> bytes:
